@@ -26,6 +26,7 @@ func TestCheckSyncPreservesEnabledWithoutUser(t *testing.T) {
 	originalConf := Conf
 	Conf = NewAppConf()
 	Conf.Sync = conf.NewSync()
+	Conf.Sync.Provider = conf.ProviderSiYuan
 	Conf.Sync.Enabled = true
 	t.Cleanup(func() {
 		Conf = originalConf
@@ -36,5 +37,30 @@ func TestCheckSyncPreservesEnabledWithoutUser(t *testing.T) {
 	}
 	if !Conf.Sync.Enabled {
 		t.Fatal("sync configuration must remain enabled without a user")
+	}
+}
+
+func TestSelfHostedSyncWithoutCloudAccount(t *testing.T) {
+	originalConf := Conf
+	t.Cleanup(func() { Conf = originalConf })
+	for _, provider := range []int{conf.ProviderWebDAV, conf.ProviderS3, conf.ProviderLocal} {
+		Conf = NewAppConf()
+		Conf.Sync = conf.NewSync()
+		Conf.Sync.Provider = provider
+		Conf.Sync.Enabled = true
+		if !checkSync(false, false, true) {
+			t.Fatalf("self-hosted provider %d requires a cloud account", provider)
+		}
+		if Conf.GetUser() != nil || IsSubscriber() {
+			t.Fatal("self-hosted access must not fabricate a cloud subscription")
+		}
+		Conf.Sync.Mode = 3
+		if checkSync(false, false, false) {
+			t.Fatal("manual-only mode must still suppress automatic sync")
+		}
+		Conf.Sync.Enabled = false
+		if checkSync(false, false, false) {
+			t.Fatal("disabled sync must remain disabled")
+		}
 	}
 }

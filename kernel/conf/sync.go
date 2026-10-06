@@ -39,8 +39,8 @@ func NewSync() *Sync {
 		Enabled:             false,
 		Perception:          false,
 		Mode:                1,
-		GenerateConflictDoc: false,
-		Provider:            ProviderSiYuan,
+		GenerateConflictDoc: true,
+		Provider:            ProviderWebDAV,
 		Interval:            30,
 		LAN:                 &LANSync{MaxConcurrentReqs: 16},
 	}

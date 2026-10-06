@@ -221,6 +221,60 @@ All Go libraries above are dependencies in `kernel/go.mod`. GitHub org: `siyuan-
 
 ---
 
-## 7. Response style
+## 7. Updating this personal fork from upstream
+
+Use this procedure when the user asks to bring an upstream feature or release into the fork. An upstream release is a candidate for review, not authorization to upgrade production, publish a release, or discard fork changes. See `README-fork.md` for the maintained fork behavior and deployment instructions.
+
+### Select and inspect the upstream change
+
+1. Inspect `git status --short`, the current branch, remotes, and recent history before modifying anything. `origin` is the personal fork; the upstream source is `https://github.com/siyuan-note/siyuan.git`. Verify an existing `upstream` remote before using it; do not silently repoint a remote.
+2. Use `gh` to read upstream release notes, the requested issue or PR, and its commits. Prefer a stable release tag containing the feature over upstream `master`. Record the selected tag and full commit SHA, identify the common ancestor, and inspect the changes since that ancestor. Check related fixes and dependency, toolchain, API, data-format, and migration changes rather than selecting a feature by its title alone.
+3. Fetch upstream without importing its tags into the fork's release namespace. Use `git fetch upstream --no-tags` for branches, then fetch a selected release explicitly as `git fetch upstream refs/tags/<release-tag>:refs/tags/upstream/<release-tag>`. Resolve and record the fetched commit SHA. Do not overwrite an existing tag that points to another commit or create a `fork-v*` tag during preparation.
+4. Prefer merging the selected release to retain upstream history and fixes. Use selective cherry-picking only when the user requests a narrow backport or a full release would introduce an identified incompatibility; inspect and include prerequisite commits and regression fixes.
+
+### Prepare an isolated integration
+
+1. Create an integration branch in a separate worktree from the current fork baseline. Preserve all existing working-tree changes, including untracked fork files. If required fork changes are uncommitted, copy the relevant changes into the isolated worktree or prepare a reviewed patch containing them; do not assume that `HEAD` already contains them. Do not reset, clean, overwrite, or silently stash the user's work.
+2. Prepare a merge with `git merge --no-commit --no-ff <upstream-commit-sha>` so neither an automatic merge commit nor a fast-forward changes the branch without review. For a selective backport, use `git cherry-pick --no-commit <commit-sha>` in dependency order. These commands do not authorize a later commit or push; the repository's explicit-authorization rule still applies.
+3. Resolve conflicts by comparing the fork behavior and upstream intent. Do not choose an entire side mechanically with `ours` or `theirs`, ignore failed patch application, or leave `.rej` files. If an upstream refactor moves a fork integration point, move the fork behavior to its actual replacement and update affected imports and tests.
+4. Accept upstream-maintained generated artifacts through Git when included in the selected change, but do not hand-edit prohibited files or regenerate bundles locally. Follow the existing API generation and cross-repository rules when integration changes contracts or public declarations. Keep this guide's repository rules and the fork update procedure when resolving an upstream `AGENTS.md` change.
+
+### Preserve the fork's behavior
+
+- Keep `kernel/conf/fork.go` and `app/src/util/fork.ts` aligned: `SelfHostedFullFeatures` enables local features and third-party sync without creating a fake official account
+- Keep `IsPaidUser()` in `kernel/model/conf.go` and the shared frontend checks in `app/src/util/needSubscribe.ts` working without a cloud user; preserve the genuine official subscription checks in `IsSubscriber()`
+- Keep the account gate in `kernel/model/sync.go` restricted to the official cloud provider; WebDAV, S3, and local filesystem sync must work without logging into SiYuan Cloud
+- Keep fresh-workspace defaults in `kernel/conf/sync.go`: WebDAV, conflict documents enabled, and synchronization disabled until configured; do not overwrite an existing workspace's provider or credentials
+- Keep `UpstreamUpdatesEnabled` false and preserve the protections in `kernel/model/updater.go`, `kernel/conf/system.go`, and `kernel/model/mount.go`; neither existing download preferences nor cached official installers may replace the fork
+- Inspect both desktop and mobile consumers of shared sync and entitlement code, including `app/src/mobile/util/onMessage.ts`; a shared helper change must preserve both platforms
+- Preserve `.github/workflows/fork-appimage.yml`, native x64 and ARM64 AppImages, SHA-pinned Actions, checksums, corresponding source archives, and draft fork releases; adapt toolchain setup to the updated repository requirements without adding upstream signing-secret dependencies
+- Preserve `deploy/sync/`, `scripts/test_sync_deployment.py`, deployment-secret ignore rules, authenticated WebDAV, encrypted Borg backups, backup serialization, consistent snapshots, restart on failure, and recovery instructions in `README-fork.md`
+- Preserve existing encrypted notebooks, repository keys, Borg keys, passwords, and recovery material; follow the encrypted-format compatibility policy before accepting a migration, and never use production data as disposable test fixtures
+
+### Verify and report the prepared update
+
+Run the following checks from the indicated working directories, plus tests for the imported feature and any affected migrations. Adapt paths or test selections if upstream has moved them; do not silently omit coverage.
+
+| Working directory | Check |
+|---|---|
+| `app/` | `pnpm install --frozen-lockfile` when dependencies changed, then `pnpm run lint` |
+| `app/` | `pnpm exec tsx --test src/util/needSubscribe.test.ts src/config/tabs/syncUi.test.ts src/config/tabs/syncRuntime.test.ts` |
+| `kernel/` | Run `gofmt` on changed Go files, then the focused fork tests below |
+| Repository root | `python3 scripts/test_sync_deployment.py` using its isolated temporary Compose project |
+| Repository root | `git diff --check` and inspection for unresolved conflicts or rejected patches |
+
+Focused fork tests, run from `kernel/`:
+
+```sh
+go test -tags 'fts5 sqlcipher' ./conf ./model -run 'Test(SelfHosted|CheckSync|ForkUpdater)'
+```
+
+For contract, localization, guide, or public declaration changes, also run the checks and synchronize the repositories required elsewhere in this file. Inspect any changes made by lint before reporting completion. Do not run frontend builds, compile a kernel binary, restart the developer's kernel, or touch production services locally. AppImage packaging belongs in the fork workflow after the user authorizes the necessary commit/push and workflow dispatch; inspect both architecture results, source archives, and checksums before recommending installation. Do not publish the draft release automatically.
+
+Report the selected upstream tag and SHA, the imported feature, conflict resolutions, preserved fork behavior, commands and results, any unverified behavior, and the integration branch/worktree location. Keep the previous working binaries and a verified backup with independently saved recovery keys before an authorized production upgrade. Test upgrades against copied data and retain a recoverable pre-migration copy; restoring an older binary alone may not reverse a data-format migration. Do not commit, push, tag, publish, or deploy unless the user explicitly authorizes the respective action.
+
+---
+
+## 8. Response style
 
 1. **Language:** Match the user's language; do not mix languages mid-sentence (keep proper nouns / identifiers in their original form)

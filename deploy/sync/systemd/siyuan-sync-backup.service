@@ -1,0 +1,12 @@
+[Unit]
+Description=Consistent Borg backup of SiYuan self-hosted sync
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/siyuan-sync
+ExecStart=/usr/bin/python3 /opt/siyuan-sync/backup.py
+UMask=0077
+TimeoutStartSec=infinity
+TimeoutStopSec=120

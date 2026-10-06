@@ -399,7 +399,7 @@ func checkSync(boot, exit, byHand bool) bool {
 		}
 		return false
 	}
-	if nil == Conf.GetUser() {
+	if conf.ProviderSiYuan == Conf.Sync.Provider && nil == Conf.GetUser() {
 		return false
 	}
 

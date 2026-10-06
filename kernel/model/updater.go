@@ -32,6 +32,7 @@ import (
 	"github.com/88250/gulu"
 	"github.com/imroc/req/v3"
 	"github.com/siyuan-note/logging"
+	"github.com/siyuan-note/siyuan/kernel/conf"
 	"github.com/siyuan-note/siyuan/kernel/util"
 	"golang.org/x/mod/semver"
 )
@@ -233,6 +234,10 @@ func getAnnouncements() (ret []*Announcement) {
 }
 
 func CheckUpdate(showMsg bool) {
+	if !conf.UpstreamUpdatesEnabled {
+		return
+	}
+
 	if !showMsg {
 		return
 	}
@@ -270,6 +275,10 @@ func isVersionUpToDate(releaseVer string) bool {
 var skipInstallPkgPlatformCached = -1
 
 func skipNewVerInstallPkg() bool {
+	if !conf.UpstreamUpdatesEnabled {
+		return true
+	}
+
 	if skipInstallPkgPlatformCached == -1 {
 		skipInstallPkgPlatformCached = 0
 		if !gulu.OS.IsWindows() && !gulu.OS.IsDarwin() {

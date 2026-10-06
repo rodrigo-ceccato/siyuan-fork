@@ -1,0 +1,53 @@
+name: siyuan-sync
+
+services:
+  sync:
+    image: rclone/rclone:1.75.1
+    user: "${SYNC_UID:?Run setup.py first}:${SYNC_GID:?Run setup.py first}"
+    restart: unless-stopped
+    command:
+      - serve
+      - webdav
+      - /data
+      - --addr=:8080
+      - --htpasswd=/run/secrets/webdav_users
+      - --config=/dev/null
+    ports:
+      - "${SYNC_BIND_ADDRESS:-127.0.0.1}:${SYNC_PORT:-6807}:8080"
+    volumes:
+      - ./data:/data
+    secrets:
+      - webdav_users
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp
+    stop_grace_period: 60s
+
+  backup:
+    profiles: [tools]
+    build:
+      context: ./backup
+    environment:
+      BORG_REPO: /borg/repository
+      BORG_PASSCOMMAND: cat /run/secrets/borg_passphrase
+      BORG_CACHE_DIR: /cache
+      BORG_SECURITY_DIR: /cache/security
+    volumes:
+      - ./data:/data:ro
+      - .:/deployment:ro
+      - ${BORG_DIRECTORY:-./borg}:/borg
+      - ./borg-cache:/cache
+      - ./restore:/restore
+    secrets:
+      - borg_passphrase
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  webdav_users:
+    file: ./secrets/webdav.htpasswd
+  borg_passphrase:
+    file: ./secrets/borg-passphrase

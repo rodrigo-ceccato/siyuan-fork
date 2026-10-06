@@ -1361,6 +1361,10 @@ func IsSubscriber() bool {
 }
 
 func IsPaidUser() bool {
+	if conf.SelfHostedFullFeatures {
+		return true
+	}
+
 	if IsSubscriber() {
 		return true
 	}

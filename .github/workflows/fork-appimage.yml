@@ -1,0 +1,133 @@
+name: Fork AppImages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["fork-v*"]
+  pull_request:
+    paths:
+      - .github/workflows/fork-appimage.yml
+      - deploy/sync/**
+      - scripts/test_sync_deployment.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-appimage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deployment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Verify WebDAV, encrypted backup, and recovery
+        run: python3 scripts/test_sync_deployment.py
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+            kernel: kernel-linux
+            config: electron-builder-linux.yml
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            kernel: kernel-linux-arm64
+            config: electron-builder-linux-arm64.yml
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: kernel/go.mod
+          cache-dependency-path: kernel/go.sum
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - name: Install dependencies
+        working-directory: app
+        run: |
+          npm install --global "$(node -p 'require("./package.json").packageManager')"
+          pnpm install --frozen-lockfile
+      - name: Verify release version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            test "$TAG" = "fork-v$(node -p 'require("./app/package.json").version')"
+          fi
+      - name: Verify frontend and self-hosted sync
+        working-directory: app
+        run: |
+          pnpm run lint
+          git diff --exit-code
+          pnpm exec tsx --test src/util/needSubscribe.test.ts src/config/tabs/syncUi.test.ts src/config/tabs/syncRuntime.test.ts
+      - name: Verify kernel self-hosted mode
+        working-directory: kernel
+        run: go test -tags "fts5 sqlcipher" ./conf ./model -run 'Test(SelfHosted|CheckSync|ForkUpdater)'
+      - name: Build frontend bundles
+        working-directory: app
+        run: |
+          pnpm run build:app
+          pnpm run build:desktop
+          pnpm run build:mobile
+          pnpm run build:export
+      - name: Build Linux kernel
+        working-directory: kernel
+        env:
+          CGO_ENABLED: "1"
+          KERNEL_DIR: ${{ matrix.kernel }}
+        run: go build -tags "fts5 sqlcipher" -ldflags "-s -w -X github.com/siyuan-note/siyuan/kernel/util.Mode=prod" -o "../app/$KERNEL_DIR/SiYuan-Kernel" .
+      - name: Package AppImage and source
+        env:
+          ARCH: ${{ matrix.arch }}
+          BUILDER_CONFIG: ${{ matrix.config }}
+        run: |
+          mkdir -p artifacts
+          cd app
+          pnpm exec electron-builder --linux AppImage --"$ARCH" --config "$BUILDER_CONFIG" --publish=never
+          cd ..
+          VERSION="$(node -p 'require("./app/package.json").version')"
+          mapfile -t IMAGES < <(find app/build -maxdepth 1 -name '*.AppImage')
+          test "${#IMAGES[@]}" -eq 1
+          cp "${IMAGES[0]}" "artifacts/siyuan-fork-${VERSION}-${ARCH}.AppImage"
+          git archive --format=tar.gz --prefix=siyuan-fork/ HEAD > "artifacts/siyuan-fork-${VERSION}-${ARCH}-source.tar.gz"
+          cd artifacts
+          sha256sum *.AppImage *.tar.gz > "SHA256SUMS-${ARCH}.txt"
+          sha256sum --check "SHA256SUMS-${ARCH}.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: siyuan-fork-${{ matrix.arch }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/fork-v')
+    needs: [build, deployment]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: siyuan-fork-*
+          merge-multiple: true
+          path: artifacts
+      - name: Create draft fork release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          gh release create "$TAG" artifacts/* --verify-tag --draft --title "$TAG" --notes "Personal SiYuan fork: self-hosted sync, upstream updater disabled. Includes corresponding source and SHA-256 checksums."
