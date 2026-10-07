@@ -53,6 +53,7 @@ muslbin/
 # 自托管服务数据与密钥
 deploy/sync/secrets/
 deploy/sync/data/
+deploy/sync/s3-data/
 deploy/sync/borg/
 deploy/sync/borg-cache/
 deploy/sync/.env

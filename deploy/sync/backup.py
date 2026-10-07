@@ -24,13 +24,14 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         run("config", "--quiet")
         run("build", "backup")
-        running = bool(run("ps", "--status", "running", "-q", "sync", capture=True).stdout.strip())
+        running = [service for service in ("s3",)
+                   if run("ps", "--status", "running", "-q", service, capture=True).stdout.strip()]
         container = "siyuan-backup-" + uuid.uuid4().hex
         for signum in (signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, interrupted)
         try:
             if running:
-                run("stop", "sync")
+                run("stop", *running)
             run("run", "--rm", "--no-deps", "--name", container, "backup")
         finally:
             for signum in (signal.SIGTERM, signal.SIGINT):
@@ -40,7 +41,7 @@ def main():
             if cleanup.returncode and b"No such container" not in cleanup.stderr:
                 raise RuntimeError("Cannot confirm backup container stopped; sync remains stopped")
             if running:
-                run("start", "sync")
+                run("start", *running)
 
 
 if __name__ == "__main__":
