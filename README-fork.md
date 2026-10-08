@@ -2,7 +2,7 @@
 
 This fork enables local paid features and S3, WebDAV, and local filesystem sync without an official cloud account. It does not create a synthetic VIP user; official SiYuan Cloud still requires its real account and subscription. The explicit switches live in `kernel/conf/fork.go` and `app/src/util/fork.ts`. Preserve both switches when rebasing. Existing workspace keys, encrypted notebook formats, and configured sync providers are preserved. Fresh workspaces default to WebDAV with conflict documents enabled; synchronization remains off until configured.
 
-Official version checks, cached installer execution, and installer downloads are disabled in the kernel, including when an existing workspace has automatic downloads enabled. Install fork updates manually. The upstream update settings remain visible but do not enable the upstream updater. No tray, Android signing, iOS signing, or fake cloud-account patches are included.
+Official version checks, cached installer execution, and installer downloads are disabled in the kernel, including when an existing workspace has automatic downloads enabled. Install fork updates manually. The upstream update settings remain visible but do not enable the upstream updater. No tray, iOS signing, or fake cloud-account patches are included. Android builds use independent fork signing as described below.
 
 ## AppImages
 
@@ -11,6 +11,29 @@ Run **Fork AppImages** from GitHub Actions for native x64 and ARM64 builds. It u
 Pushing a tag named `fork-v<app/package.json version>` also creates a draft GitHub release after both architectures pass. Publish the draft after review. The workflow uses only `GITHUB_TOKEN`; enable GitHub Actions for the fork. Release jobs have permission to write repository contents. Manual runs produce downloadable artifacts without creating a release. The inherited upstream workflows are separate and may still require upstream platform secrets; use **Fork AppImages** for this deployment.
 
 The fork retains `LICENSE` and `THIRD_PARTY_NOTICES.md` in packaged applications and includes the corresponding fork source with its artifacts. Keep these files and source availability when distributing or serving modified software.
+
+## Android APKs
+
+Run **Fork APKs** in **Actions - Fork APKs - Run workflow** after the workflow has been committed and pushed. Select `debug` for a test APK without signing secrets, or `release` for an optimized APK signed with your own persistent key. Manual runs upload artifacts without publishing a release. The workflow builds this fork's mobile and export frontends and ARM64 kernel, uses Java 21, and pins the Android wrapper to the upstream 3.8.6 commit. Android 8.0 or later on an ARM64 device is required. When upgrading the fork, review and update `ANDROID_REF` in `.github/workflows/fork-apk.yml`; the build rejects a wrapper whose version differs from `app/package.json`.
+
+Download `siyuan-fork-android-arm64-debug` or `siyuan-fork-android-arm64-release`, extract it, and run `sha256sum --check SHA256SUMS-android.txt`. The artifact contains the APK, both corresponding source archives (including the Android fork adjustments), checksums, and build commit information. Transfer the APK to your phone and allow installation from the app used to open it. The release package is `org.b3log.siyuan.fork`; debug is `org.b3log.siyuan.fork.debug`. Both can coexist with official SiYuan and use separate app storage. Configure sync using the existing data repo key; neither variant imports another installation's workspace automatically.
+
+For APKs that can update an existing installation, create and securely back up a private keystore once. For example:
+
+```sh
+keytool -genkeypair -keystore siyuan-fork.jks -alias siyuan-fork -keyalg RSA -keysize 3072 -validity 10000
+```
+
+Configure these repository secrets in **Settings - Secrets and variables - Actions**:
+
+- `FORK_ANDROID_KEYSTORE_BASE64`: the keystore encoded as base64
+- `FORK_ANDROID_KEYSTORE_PASSWORD`: the keystore password
+- `FORK_ANDROID_KEY_ALIAS`: `siyuan-fork` if using the example
+- `FORK_ANDROID_KEY_PASSWORD`: the private key password
+
+All four secrets must be supplied together. Release builds require them; debug builds also use them when configured. Keep the keystore and passwords in independent secure storage and reuse the same key for every update. The workflow reads credentials from the environment, excludes the keystore from artifacts, verifies the APK signature, and removes the runner's keystore afterward. No upstream signing secrets are used.
+
+Without these secrets, debug builds use a temporary runner certificate that changes between runs. These APKs are for testing and cannot reliably update one another in place. Back up the workspace and recovery keys before replacing such an installation; uninstalling Android apps removes their private data. Use persistent signing from the first installation intended for ongoing use. Debug and release variants have separate package IDs even when signed with the same key.
 
 ## Sync and backup server
 

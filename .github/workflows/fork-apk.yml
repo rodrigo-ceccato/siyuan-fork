@@ -1,0 +1,171 @@
+name: Fork APKs
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: Debug needs no secrets; release requires fork signing secrets
+        type: choice
+        default: debug
+        options: [debug, release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-apk-${{ github.ref }}-${{ inputs.build_type }}
+  cancel-in-progress: false
+
+env:
+  # 与 app/package.json 的版本一致，升级时审查并更新此提交。
+  ANDROID_REF: 05ae515aa6bb6e490930ddd6305f9656bec49580 # v3.8.6
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: fork
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: siyuan-note/siyuan-android
+          ref: ${{ env.ANDROID_REF }}
+          path: android
+      - name: Prepare independent Android identity and signing configuration
+        run: python3 fork/scripts/prepare_android_fork.py android
+      - name: Validate fork signing inputs
+        env:
+          BUILD_TYPE: ${{ inputs.build_type }}
+          KEYSTORE_BASE64: ${{ secrets.FORK_ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.FORK_ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.FORK_ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.FORK_ANDROID_KEY_PASSWORD }}
+        run: |
+          if [[ -n "$KEYSTORE_BASE64$STORE_PASSWORD$KEY_ALIAS$KEY_PASSWORD" ]]; then
+            if [[ -z "$KEYSTORE_BASE64" || -z "$STORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
+              echo "All four FORK_ANDROID signing secrets must be configured together."
+              exit 1
+            fi
+            umask 077
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/fork-android.jks"
+          elif [[ "$BUILD_TYPE" == release ]]; then
+            echo "Release builds require the four FORK_ANDROID signing secrets documented in README-fork.md."
+            exit 1
+          else
+            echo "Using a temporary debug certificate. Configure fork signing secrets for updatable APKs." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: fork/kernel/go.mod
+          cache-dependency-path: fork/kernel/go.sum
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install frontend dependencies
+        working-directory: fork/app
+        run: |
+          npm install --global "$(node -p 'require("./package.json").packageManager')"
+          pnpm install --frozen-lockfile
+      - name: Verify frontend and self-hosted sync
+        working-directory: fork/app
+        run: |
+          pnpm run lint
+          git diff --exit-code
+          pnpm exec tsx --test src/util/needSubscribe.test.ts src/config/tabs/syncUi.test.ts src/config/tabs/syncRuntime.test.ts
+      - name: Verify kernel self-hosted mode
+        working-directory: fork/kernel
+        run: go test -tags "fts5 sqlcipher" ./conf ./model -run 'Test(SelfHosted|CheckSync|ForkUpdater)'
+      - name: Build mobile and export frontend bundles
+        working-directory: fork/app
+        run: |
+          pnpm run build:mobile
+          pnpm run build:export
+      - name: Install Android SDK and NDK
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+      - name: Install matching gomobile
+        working-directory: fork/kernel
+        run: |
+          MOBILE_VERSION="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
+          go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION"
+          "$(go env GOPATH)/bin/gomobile" init
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Build ARM64 Android kernel
+        working-directory: fork/kernel
+        env:
+          CGO_ENABLED: "1"
+          JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8
+        run: gomobile bind -tags "fts5 sqlcipher" -ldflags "-s -w -X github.com/siyuan-note/siyuan/kernel/util.Mode=prod" -o kernel.aar -target android/arm64 -androidapi 26 ./mobile/
+      - name: Package application resources
+        run: |
+          mkdir -p android/app/libs android/app/src/main/assets
+          cp fork/kernel/kernel.aar android/app/libs/kernel.aar
+          cd fork/app
+          zip -r "$GITHUB_WORKSPACE/android/app/src/main/assets/app.zip" appearance guide stage changelogs
+          zip -j "$GITHUB_WORKSPACE/android/app/src/main/assets/app.zip" ../LICENSE ../THIRD_PARTY_NOTICES.md
+      - name: Assemble and verify APK
+        working-directory: android
+        env:
+          BUILD_TYPE: ${{ inputs.build_type }}
+          FORK_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.FORK_ANDROID_KEYSTORE_PASSWORD }}
+          FORK_ANDROID_KEY_ALIAS: ${{ secrets.FORK_ANDROID_KEY_ALIAS }}
+          FORK_ANDROID_KEY_PASSWORD: ${{ secrets.FORK_ANDROID_KEY_PASSWORD }}
+        run: |
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+          if [[ -f "$RUNNER_TEMP/fork-android.jks" ]]; then
+            export FORK_ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/fork-android.jks"
+            keytool -list -keystore "$FORK_ANDROID_KEYSTORE_PATH" -storepass:env FORK_ANDROID_KEYSTORE_PASSWORD -alias "$FORK_ANDROID_KEY_ALIAS" > /dev/null
+          fi
+          chmod +x gradlew
+          if [[ "$BUILD_TYPE" == release ]]; then
+            ./gradlew --no-daemon assembleOfficialRelease
+          else
+            ./gradlew --no-daemon assembleOfficialDebug
+          fi
+          mapfile -t APKS < <(find "app/build/outputs/apk/official/$BUILD_TYPE" -maxdepth 1 -name '*.apk')
+          test "${#APKS[@]}" -eq 1
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "${APKS[0]}"
+          VERSION="$(node -p 'require("../fork/app/package.json").version')"
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp "${APKS[0]}" "$GITHUB_WORKSPACE/artifacts/siyuan-fork-${VERSION}-arm64-${BUILD_TYPE}.apk"
+      - name: Archive corresponding sources and checksums
+        env:
+          BUILD_TYPE: ${{ inputs.build_type }}
+        run: |
+          VERSION="$(node -p 'require("./fork/app/package.json").version')"
+          git -C fork archive --format=tar.gz --prefix=siyuan-fork/ HEAD > "artifacts/siyuan-fork-${VERSION}-source.tar.gz"
+          mkdir -p "$RUNNER_TEMP/android-source"
+          git -C android archive HEAD | tar -x -C "$RUNNER_TEMP/android-source"
+          cp android/build.gradle "$RUNNER_TEMP/android-source/build.gradle"
+          cp android/app/build.gradle "$RUNNER_TEMP/android-source/app/build.gradle"
+          cp android/app/src/main/AndroidManifest.xml "$RUNNER_TEMP/android-source/app/src/main/AndroidManifest.xml"
+          cp android/app/src/main/res/xml/shortcuts.xml "$RUNNER_TEMP/android-source/app/src/main/res/xml/shortcuts.xml"
+          mkdir -p "$RUNNER_TEMP/android-source/app/src/debug/res/xml"
+          cp android/app/src/debug/res/xml/shortcuts.xml "$RUNNER_TEMP/android-source/app/src/debug/res/xml/shortcuts.xml"
+          cp android/signings.gradle "$RUNNER_TEMP/android-source/signings.gradle"
+          tar -czf "artifacts/siyuan-fork-${VERSION}-android-source.tar.gz" -C "$RUNNER_TEMP" android-source
+          printf 'Fork commit: %s\nAndroid commit: %s\nVariant: %s\n' "$(git -C fork rev-parse HEAD)" "$(git -C android rev-parse HEAD)" "$BUILD_TYPE" > artifacts/BUILD-INFO.txt
+          cd artifacts
+          sha256sum -- *.apk *.tar.gz BUILD-INFO.txt > SHA256SUMS-android.txt
+          sha256sum --check SHA256SUMS-android.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: siyuan-fork-android-arm64-${{ inputs.build_type }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/fork-android.jks"
